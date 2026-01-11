@@ -2,7 +2,7 @@ A Python library for human-like mouse and keyboard automation, designed to work 
 
 ## Features
 
-- **Human-like Mouse Movement**: Uses Bézier curves, WindMouse algorithms, and physiological jitter to simulate realistic cursor movement.
+- **Human-like Mouse Movement**: Uses WindMouse algorithms, and physiological jitter to simulate realistic cursor movement.
 - **Human-like Typing**: Simulates typing speeds, typos, corrections, and thinking pauses.
 - **Visual Debugging**: Generate heatmaps or trajectory JPEGs of mouse movements.
 
