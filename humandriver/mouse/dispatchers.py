@@ -3,12 +3,13 @@ import asyncio
 import math
 import random
 import time
+import bisect
 import logging
 from typing import List, Dict, Tuple, Optional, Callable, Awaitable, Any
 from zendriver import cdp
 
 from .config import cfg
-from .telemetry import recorder
+from .telemetry import recorder, _MOUSE_SEND_LOCK
 from .geometry import get_viewport, _clamp_point_to_viewport
 
 # Config values copied locally for speed/readability
@@ -22,18 +23,40 @@ MIN_SLEEP_S: float = getattr(cfg, "MIN_SLEEP_S", 0.003)
 TARGET_HZ: float = getattr(cfg, "TARGET_HZ", 110)
 
 
+BRIDGE_THRESHOLD_PX: float = getattr(cfg, "BRIDGE_THRESHOLD_PX", 6.0)
+BRIDGE_STEPS_MINMAX: Tuple[int, int] = getattr(cfg, "BRIDGE_STEPS_MINMAX", (8, 18))
+BRIDGE_CURVE_JITTER_FRAC: float = getattr(cfg, "BRIDGE_CURVE_JITTER_FRAC", 0.06)
+
+SMOOTH_ITERS: int = getattr(cfg, "SMOOTH_ITERS", 1)  # 0 = off
+SMOOTH_WEIGHT: float = getattr(cfg, "SMOOTH_WEIGHT", 0.22)
+
+GLOBAL_MIN_INTERVAL_S: float = getattr(cfg, "GLOBAL_MIN_INTERVAL_S", 0.006)
+FINAL_SNAP_EPS_PX: float = getattr(cfg, "FINAL_SNAP_EPS_PX", 0.4)
+
+CURVE_MIN_WAYPOINTS: int = getattr(cfg, "CURVE_MIN_WAYPOINTS", 9)
+CURVE_MAX_WAYPOINTS: int = getattr(cfg, "CURVE_MAX_WAYPOINTS", 14)
+CURVE_LATERAL_FRAC_MIN: float = getattr(cfg, "CURVE_LATERAL_FRAC_MIN", 0.08)
+CURVE_LATERAL_FRAC_MAX: float = getattr(cfg, "CURVE_LATERAL_FRAC_MAX", 0.18)
+CURVE_ALONG_JITTER_FRAC: float = getattr(cfg, "CURVE_ALONG_JITTER_FRAC", 0.03)
+
+WOBBLE_LATERAL_FRAC: float = getattr(cfg, "WOBBLE_LATERAL_FRAC", 0.04)
+WOBBLE_FREQ_1: float = getattr(cfg, "WOBBLE_FREQ_1", 0.8)
+WOBBLE_FREQ_2: float = getattr(cfg, "WOBBLE_FREQ_2", 2.2)
+
+END_JITTER_FRAC: float = getattr(cfg, "END_JITTER_FRAC", 0.006)
+
 CDP_SEND_TIMEOUT_S: float = 0.05
 CDP_SEND_MIN_INTERVAL_S: float = 0.015
 
+_last_emit_timestamp: Optional[float] = None  # module-level guard against bursts
 _last_cdp_send_timestamp: Optional[float] = None
 _CDP_SEND_SEMAPHORE = asyncio.Semaphore(1)
-_MOUSE_SEND_LOCK = asyncio.Lock()
 
 
 async def _send_cdp_event(
     page, fn: Callable[[], Awaitable[Any]], *, label: str
 ) -> None:
-    """Bounded-time CDP send with shielded task."""
+    """Bounded-time CDP send with shielded task so it can't be cancelled mid-flight."""
     logger = logging.getLogger(__name__)
     global _last_cdp_send_timestamp
     async with _CDP_SEND_SEMAPHORE:
@@ -64,13 +87,236 @@ async def _send_cdp_event(
                     task.result()
                     global _last_cdp_send_timestamp
                     _last_cdp_send_timestamp = time.perf_counter()
+                    logger.debug(
+                        "CDP %s completed late after %.1f ms",
+                        label,
+                        (time.perf_counter() - start) * 1000.0,
+                    )
                 except Exception:
-                    pass
+                    logger.warning("CDP %s failed after timeout", label, exc_info=True)
 
             send_task.add_done_callback(_late_log)
             _last_cdp_send_timestamp = time.perf_counter()
         except Exception:
             logger.warning("CDP %s failed (skipped this event)", label, exc_info=True)
+
+
+def _smoothstep_01(t: float) -> float:
+    """Cubic smoothstep interpolation in [0,1]."""
+    t = max(0.0, min(1.0, t))
+    return t * t * (3 - 2 * t)
+
+
+def _choose_average_speed_px_per_ms(total_distance_pixels: float) -> float:
+    """Pick an average speed (px/ms) based on total distance (heuristic)."""
+    normalized_distance = min(1.5, total_distance_pixels / 1200.0)
+    base = max(0.35, MIN_SPEED_PX_PER_MS + 0.05)
+    span = max(0.55, (MAX_SPEED_PX_PER_MS - 0.20))
+    speed = base + span * _smoothstep_01(min(1.0, normalized_distance))
+    return max(MIN_SPEED_PX_PER_MS, min(MAX_SPEED_PX_PER_MS, speed))
+
+
+def _estimate_duration_fitts_style(
+    distance_pixels: float,
+    target_width_pixels: float,
+    constant_a_ms: float = 120.0,
+    constant_b_ms: float = 180.0,
+) -> float:
+    """Estimate movement duration using a Fitts' law–style model (seconds)."""
+    target_width_pixels = max(4.0, float(target_width_pixels))
+    distance_pixels = max(0.0, float(distance_pixels))
+    movement_time_ms = constant_a_ms + constant_b_ms * math.log2(
+        distance_pixels / target_width_pixels + 1.0
+    )
+    movement_time_ms *= random.uniform(0.95, 1.08)
+    return max(0.06, movement_time_ms / 1000.0)
+
+
+def _ease_fraction_symmetric(
+    timeline_fraction: float, power: float = EASE_POWER
+) -> float:
+    """Symmetric ease-in/ease-out mapping of t∈[0,1] with a tunable exponent."""
+    t = max(0.0, min(1.0, timeline_fraction))
+    up, down = t**power, (1.0 - t) ** power
+    return up / (up + down) if (up + down) > 0 else t
+
+
+def _coalesce_small_steps(
+    points: List[Dict[str, float]], threshold_pixels: float
+) -> List[Dict[str, float]]:
+    """Merge very small consecutive steps to avoid over-sampling (reduces noise/overhead)."""
+    if not points:
+        return points
+    result: List[Dict[str, float]] = [points[0]]
+    accumulated_dx = 0.0
+    accumulated_dy = 0.0
+
+    for i in range(1, len(points)):
+        delta_x = points[i]["x"] - result[-1]["x"]
+        delta_y = points[i]["y"] - result[-1]["y"]
+        step_length = math.hypot(delta_x, delta_y)
+        if step_length < threshold_pixels:
+            accumulated_dx += delta_x
+            accumulated_dy += delta_y
+            if i == len(points) - 1:
+                result.append(
+                    {
+                        "x": result[-1]["x"] + accumulated_dx,
+                        "y": result[-1]["y"] + accumulated_dy,
+                    }
+                )
+        else:
+            if abs(accumulated_dx) + abs(accumulated_dy) > 0:
+                result.append(
+                    {
+                        "x": result[-1]["x"] + accumulated_dx,
+                        "y": result[-1]["y"] + accumulated_dy,
+                    }
+                )
+                accumulated_dx = accumulated_dy = 0.0
+            result.append(points[i])
+    return result
+
+
+def _chaikin_corner_cutting(
+    points: List[Dict[str, float]], weight: float
+) -> List[Dict[str, float]]:
+    """One pass of Chaikin corner-cutting smoothing. Preserves endpoints."""
+    if len(points) < 3:
+        return points[:]
+    smoothed: List[Dict[str, float]] = [points[0]]
+    for i in range(0, len(points) - 1):
+        p0, p1 = points[i], points[i + 1]
+        q = {
+            "x": (1 - weight) * p0["x"] + weight * p1["x"],
+            "y": (1 - weight) * p0["y"] + weight * p1["y"],
+        }
+        r = {
+            "x": weight * p0["x"] + (1 - weight) * p1["x"],
+            "y": weight * p0["y"] + (1 - weight) * p1["y"],
+        }
+        smoothed.append(q)
+        smoothed.append(r)
+    smoothed.append(points[-1])
+    return smoothed
+
+
+def _build_bridge_waypoints(
+    start_point: Tuple[float, float],
+    end_point: Tuple[float, float],
+) -> List[Dict[str, float]]:
+    """Generate a short, curvy bridging path between two positions."""
+    start_x, start_y = start_point
+    end_x, end_y = end_point
+    count = random.randint(*BRIDGE_STEPS_MINMAX)
+
+    delta_x, delta_y = end_x - start_x, end_y - start_y
+    distance = math.hypot(delta_x, delta_y) or 1.0
+    tangent_x, tangent_y = delta_x / distance, delta_y / distance
+    normal_x, normal_y = -tangent_y, tangent_x
+
+    jitter_max = BRIDGE_CURVE_JITTER_FRAC
+    jitter_max = max(0.10, min(0.18, jitter_max * 2.0))
+    anchor_fractions = [0.25, 0.55, 0.85]
+    anchors: List[Tuple[float, float]] = []
+    for fraction in anchor_fractions:
+        anchor_base_x = start_x + delta_x * fraction
+        anchor_base_y = start_y + delta_y * fraction
+        lateral_offset = random.uniform(-jitter_max, jitter_max) * distance
+        forward_offset = random.uniform(-0.02, 0.04) * distance
+        anchors.append(
+            (
+                anchor_base_x + normal_x * lateral_offset + tangent_x * forward_offset,
+                anchor_base_y + normal_y * lateral_offset + tangent_y * forward_offset,
+            )
+        )
+
+    polyline = [(start_x, start_y), *anchors, (end_x, end_y)]
+
+    cumulative_lengths = [0.0]
+    total_length = 0.0
+    for i in range(1, len(polyline)):
+        segment_length = math.hypot(
+            polyline[i][0] - polyline[i - 1][0], polyline[i][1] - polyline[i - 1][1]
+        )
+        total_length += segment_length
+        cumulative_lengths.append(total_length)
+    if total_length <= 1e-6:
+        return [{"x": end_x, "y": end_y}]
+
+    points: List[Dict[str, float]] = [{"x": start_x, "y": start_y}]
+    for i in range(1, count):
+        t = i / count
+        s = t * total_length
+        j = bisect.bisect_left(cumulative_lengths, s)
+        if j <= 0:
+            x, y = polyline[0]
+        elif j >= len(polyline):
+            x, y = polyline[-1]
+        else:
+            s0, s1 = cumulative_lengths[j - 1], cumulative_lengths[j]
+            p0, p1 = polyline[j - 1], polyline[j]
+            u = 0.0 if s1 <= s0 else (s - s0) / (s1 - s0)
+            x = p0[0] + (p1[0] - p0[0]) * u
+            y = p0[1] + (p1[1] - p0[1]) * u
+        points.append({"x": x, "y": y})
+    points.append({"x": end_x, "y": end_y})
+    return points
+
+
+def _make_curvy_polyline(
+    start_point: Tuple[float, float],
+    end_point: Tuple[float, float],
+    viewport_width: float,
+    viewport_height: float,
+) -> List[Dict[str, float]]:
+    """Turn a 2-point straight segment into a gently wavy polyline (wind + jitter)."""
+    start_x, start_y = start_point
+    end_x, end_y = end_point
+    delta_x, delta_y = end_x - start_x, end_y - start_y
+    distance = math.hypot(delta_x, delta_y)
+    if distance < 1e-6:
+        return [{"x": start_x, "y": start_y}, {"x": end_x, "y": end_y}]
+
+    tangent_x, tangent_y = delta_x / distance, delta_y / distance
+    normal_x, normal_y = -tangent_y, tangent_x
+
+    # Gentle random-walk wobble; amplitude grows then fades to avoid hooky endpoints
+    sample_count = random.randint(CURVE_MIN_WAYPOINTS, CURVE_MAX_WAYPOINTS)
+    max_lateral = (
+        random.uniform(CURVE_LATERAL_FRAC_MIN, CURVE_LATERAL_FRAC_MAX) * distance
+    )
+    lateral = 0.0
+    lateral_step_sigma = max_lateral * 0.06
+    along_drift_sigma = distance * CURVE_ALONG_JITTER_FRAC * 0.08
+
+    points: List[Dict[str, float]] = []
+    for i in range(sample_count + 1):
+        t = i / float(sample_count)
+        base_x = start_x + delta_x * t
+        base_y = start_y + delta_y * t
+
+        envelope = math.sin(math.pi * t) ** 1.05
+        lateral += random.gauss(0.0, lateral_step_sigma) * envelope * 1.25
+        lateral = max(-max_lateral, min(max_lateral, lateral))
+        along_jitter = random.gauss(0.0, along_drift_sigma) * envelope
+
+        x = base_x + normal_x * lateral + tangent_x * along_jitter
+        y = base_y + normal_y * lateral + tangent_y * along_jitter
+        x, y = _clamp_point_to_viewport(x, y, viewport_width, viewport_height)
+        points.append({"x": x, "y": y})
+
+    # Ensure exact endpoints
+    points[0] = {"x": start_x, "y": start_y}
+    points[-1] = {"x": end_x, "y": end_y}
+    return points
+
+
+def _soft_lateral_wobble(t: float, phase1: float, phase2: float) -> float:
+    """Two-sine low-frequency lateral wobble in [-1,1], parameterized by path t."""
+    return 0.62 * math.sin(
+        2.0 * math.pi * (WOBBLE_FREQ_1 * t + phase1)
+    ) + 0.38 * math.sin(2.0 * math.pi * (WOBBLE_FREQ_2 * t + phase2))
 
 
 def windmouse(
@@ -84,7 +330,7 @@ def windmouse(
     target_area: float = cfg.TARGET_AREA,
     jitter: float = cfg.JITTER,
 ) -> List[Tuple[float, float]]:
-    """Simple windmouse path generator."""
+    """Simple windmouse path generator with input guards and runaway protection."""
     try:
         sx, sy = float(start[0]), float(start[1])
         tx, ty = float(target[0]), float(target[1])
@@ -94,7 +340,8 @@ def windmouse(
         max_step = float(max_step)
         target_area = float(target_area)
         jitter = float(jitter)
-    except Exception:
+    except Exception as exc:
+        logging.getLogger(__name__).warning("windmouse input coercion failed: %s", exc)
         return [start, target]
 
     vx = vy = 0.0
@@ -144,7 +391,7 @@ def windmouse(
 
 
 async def _emit_mouse_move(page, x: float, y: float) -> None:
-    """Minimal mouse move emit with fast retries."""
+    """Minimal mouse move emit with fast retries; aborts quickly on persistent CDP stalls."""
     recorder.log_move(x, y)
     if cdp is not None:
         last_err: Optional[BaseException] = None
@@ -165,12 +412,15 @@ async def _emit_mouse_move(page, x: float, y: float) -> None:
                         )
                     return
                 except asyncio.TimeoutError:
+                    # Timeout: the shielded task continues in background.
+                    # Return immediately to maintain trajectory rhythm (drop this frame)
+                    # rather than stalling for retries.
                     return
                 except Exception as exc:
                     last_err = exc
                 await asyncio.sleep(0.02)
         raise RuntimeError(
-            f"mouseMoved send failed at ({x:.2f}, {y:.2f})"
+            f"mouseMoved send failed after retries at ({x:.2f}, {y:.2f})"
         ) from last_err
 
 
@@ -211,8 +461,13 @@ async def dispatch_mouse_path(
             ((pts[i]["x"], pts[i]["y"]), (pts[i + 1]["x"], pts[i + 1]["y"]))
         )
 
+    # Emit cadence (configurable); default to 15ms between steps for responsiveness.
     interval = float(getattr(cfg, "MOVE_INTERVAL_S", 0.015))
-    if interval > 0.1:
+    if interval > 0.1:  # guard against misconfig causing multi-second gaps
+        logging.getLogger(__name__).warning(
+            "MOVE_INTERVAL_S=%s too large; capping to 15ms for responsiveness",
+            interval,
+        )
         interval = 0.015
     max_move_duration = float(getattr(cfg, "MAX_MOVE_DURATION_S", 1.0))
 
@@ -220,11 +475,22 @@ async def dispatch_mouse_path(
         try:
             path_points = windmouse(start, end)
         except Exception:
+            logging.getLogger(__name__).warning(
+                "windmouse failed for segment %s->%s; falling back to straight line",
+                start,
+                end,
+                exc_info=True,
+            )
             path_points = [start, end]
         if not path_points:
             path_points = [start, end]
 
+        # If path is excessively long, decimate to avoid blocking event loop
         if len(path_points) > 1200:
+            logging.getLogger(__name__).warning(
+                "windmouse produced %s points; decimating to 1200 to avoid stall",
+                len(path_points),
+            )
             stride = max(1, len(path_points) // 1200)
             path_points = path_points[::stride] + [path_points[-1]]
 

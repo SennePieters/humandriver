@@ -18,6 +18,18 @@ class cfg:
     OVERSHOOT_PX = 5.0
     ADD_HESITATION = False
 
+    # --- Bézier / spline (optional) ---
+    BEZIER_STEPS = 160
+    BEZIER_JITTER = 0.30
+    SPLINE_INTERNAL_POINTS = 3
+    SPLINE_SAMPLES_PER_SEGMENT = 32
+    SPLINE_LATERAL_NOISE = 0.12
+    SPLINE_MICRO_JITTER = 0.22
+
+    # --- Strategy selection ---
+    PATH_STRATEGY = "windmouse"
+    PATH_MIX_WEIGHTS = {"windmouse": 1.0}
+
     # --- Target offset rules ---
     TARGET_SAFE_INSET_FRAC = 0.15
     TARGET_MICRO_JITTER_PX = 0.8
@@ -46,6 +58,19 @@ class cfg:
 
     GLOBAL_MIN_INTERVAL_S = 0.011
     FINAL_SNAP_EPS_PX = 0.8  # softer landing
+
+    # --- Curvy S-shape polyline (for 2-point moves) ---
+    CURVE_MIN_WAYPOINTS = 18
+    CURVE_MAX_WAYPOINTS = 28
+    CURVE_LATERAL_FRAC_MIN = 0.22
+    CURVE_LATERAL_FRAC_MAX = 0.40
+    CURVE_ALONG_JITTER_FRAC = 0.08
+
+    # --- Subtle wobble for hand tremor effect ---
+    WOBBLE_LATERAL_FRAC = 0.018
+    WOBBLE_FREQ_1 = 0.8
+    WOBBLE_FREQ_2 = 2.0
+    END_JITTER_FRAC = 0.006
 
     # --- Legacy/compat ---
     MIN_STEP_SLEEP_S = 0.004

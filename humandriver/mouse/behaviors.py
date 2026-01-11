@@ -14,18 +14,28 @@ CLICK_DOWN_UP_DELAY_S: Tuple[float, float] = (0.028, 0.065)
 DEFAULT_SAFE_INSET_FRAC: float = 0.08
 
 
+def _clamp_point_scalar(value: float, lower: float, upper: float) -> float:
+    """Clamp a scalar value into [lower, upper]."""
+    return max(lower, min(upper, value))
+
+
 def _clamp_point(
     x: float, y: float, viewport_width: float, viewport_height: float
 ) -> Tuple[float, float]:
-    return max(0.0, min(viewport_width, x)), max(0.0, min(viewport_height, y))
+    """Clamp a point (x,y) into the viewport rectangle."""
+    return _clamp_point_scalar(x, 0.0, viewport_width), _clamp_point_scalar(
+        y, 0.0, viewport_height
+    )
 
 
 def _compute_rest_radius(viewport_width: float, viewport_height: float) -> float:
+    """Compute a small local 'rest' radius based on viewport size."""
     base = REST_RADIUS_FRAC_OF_MIN * min(viewport_width, viewport_height)
     return min(REST_RADIUS_PX_HARD_MAX, base)
 
 
 def _resolve_mouse_button(name: str = "left") -> Any:
+    """Return a CDP-compatible mouse button object (enum or shim)."""
     if cdp is not None:
         button_enum = getattr(cdp.input_, "MouseButton", None)
     else:
@@ -51,6 +61,7 @@ def _resolve_mouse_button(name: str = "left") -> Any:
 
 
 async def _emit_click(page, x: float, y: float, *, button_name: str = "left") -> None:
+    """Emit a full click (press, short human-like delay, release) at (x,y)."""
     button = _resolve_mouse_button(button_name)
     if cdp is not None:
         await _send_cdp_event(
@@ -92,6 +103,7 @@ async def move_to_element(
     move_to_rest_after: bool = False,
     rest_delay_seconds: float = 0.0,
 ) -> Tuple[float, float]:
+    """Move the cursor to a target element and optionally click, then optionally rest nearby."""
     viewport_width, viewport_height = await get_viewport(page)
 
     if isinstance(target, dict) and {"x", "y", "width", "height"} <= set(target.keys()):

@@ -13,7 +13,13 @@ class ViewportUnavailable(RuntimeError):
 
 
 def _unwrap_zendriver_value(possibly_wrapped: Any) -> Any:
-    """Normalize zendriver responses into plain dicts or values."""
+    """Normalize zendriver responses into plain dicts or values.
+
+    Behavior:
+      - If input is a tuple, take its first element (zendriver often returns tuples).
+      - If input exposes to_json()/to_dict()/dict(), call it to get a dict.
+      - Otherwise, return the input as-is or {} if falsy.
+    """
     value = possibly_wrapped
     if isinstance(value, tuple):
         value = value[0] if value else {}
@@ -35,7 +41,11 @@ def _clamp_point_to_viewport(
 
 
 def _quad_to_bounding_rect(quad: Sequence[float]) -> Dict[str, float]:
-    """Convert an 8-number quad to a bounding rect dict."""
+    """Convert an 8-number quad (x1,y1,x2,y2,x3,y3,x4,y4) to a bounding rect dict.
+
+    Returns:
+        dict: {x,y,width,height,cx,cy} in CSS pixels.
+    """
     xs = [quad[0], quad[2], quad[4], quad[6]]
     ys = [quad[1], quad[3], quad[5], quad[7]]
     x_min, x_max = min(xs), max(xs)
@@ -55,7 +65,7 @@ def _quad_to_bounding_rect(quad: Sequence[float]) -> Dict[str, float]:
 def _inset_rect_fraction(
     rect: Dict[str, float], inset_fraction: float
 ) -> Dict[str, float]:
-    """Inset a rectangle by a fraction of its size on all sides."""
+    """Inset a rectangle by a fraction of its size on all sides and return a new rect."""
     inset_fraction = max(0.0, min(0.25, float(inset_fraction)))
     inset_x = rect["width"] * inset_fraction
     inset_y = rect["height"] * inset_fraction
@@ -87,7 +97,12 @@ async def get_viewport(
     poll_interval_seconds: float = 0.05,
     debug: bool = False,
 ) -> Tuple[int, int]:
-    """Lightweight viewport fetch with fallback."""
+    """
+    Lightweight viewport fetch:
+      - Try Page.getLayoutMetrics first.
+      - Fallback to window.innerWidth/innerHeight.
+      - Short polling window to avoid long stalls.
+    """
     if cdp is None:
         raise RuntimeError("zendriver.cdp is required to read the viewport size")
 
