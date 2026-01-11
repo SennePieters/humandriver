@@ -86,3 +86,13 @@ def summarize_typing(seed: Optional[int] = None) -> str:
         f"  Corrections (errors fixed): {recorder.error_count}\n"
         f"  Random seed: {used_seed if used_seed is not None else 'N/A'}"
     )
+
+
+async def summarize_typing_async(seed: Optional[int] = None) -> str:
+    """Async wrapper for summarize_typing so you can `await` it if you prefer."""
+    return summarize_typing(seed)
+
+
+async def print_typing_summary(seed: Optional[int] = None) -> None:
+    """Async helper that prints the summary."""
+    print(summarize_typing(seed))

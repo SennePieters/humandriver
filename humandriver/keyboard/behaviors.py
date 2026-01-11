@@ -4,10 +4,11 @@ import math
 import logging
 from typing import Optional
 
-from ..utils import HiResTimer, clamp as _clamp, random_uniform as _rand
+from ..utils import clamp as _clamp, random_uniform as _rand
 from .config import kcfg
 from .telemetry import recorder
 from .utils import (
+    HiResTimer,
     _base_char_delay_for_wpm,
     _drift,
     _lognormal_delay,

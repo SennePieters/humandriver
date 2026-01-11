@@ -2,6 +2,8 @@ from __future__ import annotations
 import asyncio
 import math
 import random
+import ctypes
+import platform
 from .config import kcfg
 
 _PRINTABLE_EXCEPTIONS = set("\n\t\r")
@@ -15,6 +17,17 @@ def _is_printable(ch: str) -> bool:
 
 def _sleep(dt: float) -> asyncio.Future:
     return asyncio.sleep(max(0.0, dt))
+
+
+class HiResTimer:
+    def __enter__(self):
+        if ctypes and platform.system() == "Windows":
+            ctypes.windll.winmm.timeBeginPeriod(1)
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        if ctypes and platform.system() == "Windows":
+            ctypes.windll.winmm.timeEndPeriod(1)
 
 
 def _lognormal_delay(base_dt: float, jitter: float) -> float:

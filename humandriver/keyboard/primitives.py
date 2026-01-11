@@ -3,8 +3,7 @@ import asyncio
 import logging
 from typing import Callable, Awaitable, Any, Optional, Dict
 from zendriver import cdp
-
-CDP_SEND_TIMEOUT_S: float = 0.35  # keep input sends from blocking the loop
+from .config import kcfg
 
 
 async def _send_cdp_event(
@@ -14,12 +13,12 @@ async def _send_cdp_event(
     # Create the task once to ensure it runs to completion regardless of timeout
     task = asyncio.create_task(fn())
     try:
-        await asyncio.wait_for(asyncio.shield(task), timeout=CDP_SEND_TIMEOUT_S)
+        await asyncio.wait_for(asyncio.shield(task), timeout=kcfg.CDP_SEND_TIMEOUT_S)
     except asyncio.TimeoutError:
         logging.getLogger(__name__).warning(
             "CDP %s stalled >%.0f ms; continuing in background",
             label,
-            CDP_SEND_TIMEOUT_S * 1000.0,
+            kcfg.CDP_SEND_TIMEOUT_S * 1000.0,
         )
         # Task continues in background; no need to re-schedule
     except Exception:

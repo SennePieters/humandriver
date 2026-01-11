@@ -51,3 +51,6 @@ class kcfg:
 
     # Small overhead to account for CDP dispatch etc., per printable char or edit key
     DISPATCH_OVERHEAD_S = 0.0035
+
+    # Timeout for CDP operations (keep input sends from blocking the loop)
+    CDP_SEND_TIMEOUT_S = 0.35
