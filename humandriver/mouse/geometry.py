@@ -1,15 +1,55 @@
 from __future__ import annotations
-from typing import Any, Tuple, Dict, Union, Optional, Sequence
+from typing import Any, Tuple, Dict, Union, Optional, Sequence, TypedDict, List
 import time
 import asyncio
+import random
 from zendriver import cdp
-from ..utils import clamp, random_uniform
 
 
 class ViewportUnavailable(RuntimeError):
-    """Raised when viewport size cannot be determined from CDP."""
+    """Raised when viewport size cannot be determined from CDP.
+
+    You typically see this if the page hasn't loaded enough for
+    Page.getLayoutMetrics() to return positive clientWidth/Height.
+    """
 
     pass
+
+
+Point = Tuple[float, float]
+
+
+class XY(TypedDict):
+    """TypedDict for a point with explicit x/y keys (e.g., path waypoints)."""
+
+    x: float
+    y: float
+
+
+Path = List[XY]
+
+
+def _get_attr_or_key(container: Any, name: str, default=None):
+    """Safe accessor that works with dicts or attribute-style objects."""
+    if isinstance(container, dict):
+        return container.get(name, default)
+    if hasattr(container, name):
+        try:
+            return getattr(container, name)
+        except Exception:
+            return default
+    return default
+
+
+def _clamp_scalar(value: float, lower_bound: float, upper_bound: float) -> float:
+    """Clamp a scalar into [lower_bound, upper_bound]."""
+    return max(lower_bound, min(upper_bound, value))
+
+
+def _random_uniform_between(a: float, b: float) -> float:
+    """Uniform random sample between a and b (order agnostic)."""
+    lower, upper = (a, b) if a <= b else (b, a)
+    return random.uniform(lower, upper)
 
 
 def _unwrap_zendriver_value(possibly_wrapped: Any) -> Any:
@@ -37,7 +77,7 @@ def _clamp_point_to_viewport(
     x: float, y: float, viewport_width: float, viewport_height: float
 ) -> Tuple[float, float]:
     """Clamp a point (x,y) into [0,viewport_width]×[0,viewport_height]."""
-    return clamp(x, 0.0, viewport_width), clamp(y, 0.0, viewport_height)
+    return max(0.0, min(viewport_width, x)), max(0.0, min(viewport_height, y))
 
 
 def _quad_to_bounding_rect(quad: Sequence[float]) -> Dict[str, float]:
@@ -85,8 +125,8 @@ def _inset_rect_fraction(
 
 def _sample_point_in_rect(rect: Dict[str, float]) -> Tuple[float, float]:
     """Uniformly sample a point inside a rect."""
-    x = random_uniform(rect["x"], rect["x"] + rect["width"])
-    y = random_uniform(rect["y"], rect["y"] + rect["height"])
+    x = _random_uniform_between(rect["x"], rect["x"] + rect["width"])
+    y = _random_uniform_between(rect["y"], rect["y"] + rect["height"])
     return x, y
 
 
@@ -182,36 +222,75 @@ async def get_element_rect(
     if cdp is None:
         raise RuntimeError("zendriver.cdp is required for get_element_rect")
 
+    def _unwrap(obj: Any) -> Any:
+        if isinstance(obj, tuple):
+            obj = obj[0] if obj else {}
+        for name in ("to_json", "to_dict", "dict"):
+            m = getattr(obj, name, None)
+            if callable(m):
+                try:
+                    return m()
+                except Exception:
+                    pass
+        return obj or {}
+
     async def _get_box_by_object_id(object_id: str) -> Optional[Dict[str, float]]:
         try:
             resp = await page.send(cdp.dom.get_box_model(object_id=object_id))
-            bm = _unwrap_zendriver_value(resp)
+            bm = _unwrap(resp)
             model = bm.get("model") or bm
             content = model.get("content") or bm.get("content")
             if not content or len(content) < 8:
                 return None
-            return _quad_to_bounding_rect(content)
+            xs = [content[0], content[2], content[4], content[6]]
+            ys = [content[1], content[3], content[5], content[7]]
+            x_min, x_max = min(xs), max(xs)
+            y_min, y_max = min(ys), max(ys)
+            w = max(0.0, x_max - x_min)
+            h = max(0.0, y_max - y_min)
+            return {
+                "x": x_min,
+                "y": y_min,
+                "width": w,
+                "height": h,
+                "cx": x_min + w / 2.0,
+                "cy": y_min + h / 2.0,
+            }
         except Exception:
             return None
 
     async def _get_box_by_node_id(node_id: int) -> Optional[Dict[str, float]]:
         try:
             resp = await page.send(cdp.dom.get_box_model(node_id=node_id))
-            bm = _unwrap_zendriver_value(resp)
+            bm = _unwrap(resp)
             model = bm.get("model") or bm
             content = model.get("content") or bm.get("content")
             if not content or len(content) < 8:
                 return None
-            return _quad_to_bounding_rect(content)
+            xs = [content[0], content[2], content[4], content[6]]
+            ys = [content[1], content[3], content[5], content[7]]
+            x_min, x_max = min(xs), max(xs)
+            y_min, y_max = min(ys), max(ys)
+            w = max(0.0, x_max - x_min)
+            h = max(0.0, y_max - y_min)
+            return {
+                "x": x_min,
+                "y": y_min,
+                "width": w,
+                "height": h,
+                "cx": x_min + w / 2.0,
+                "cy": y_min + h / 2.0,
+            }
         except Exception:
             return None
 
     # --- Case A: raw CSS selector string ---
     if isinstance(target, str):
         sel = target
+
+        # Poll: Runtime.evaluate (document.querySelector) -> objectId
         start = time.perf_counter()
         while (time.perf_counter() - start) < timeout_seconds:
-            # Attempt 1: Runtime.evaluate -> objectId
             try:
                 eval_resp = await page.send(
                     cdp.runtime.evaluate(
@@ -220,7 +299,7 @@ async def get_element_rect(
                         await_promise=False,
                     )
                 )
-                er = _unwrap_zendriver_value(eval_resp)
+                er = _unwrap(eval_resp)
                 res = er.get("result") or er
                 object_id = (
                     res.get("objectId")
@@ -234,10 +313,10 @@ async def get_element_rect(
             except Exception:
                 pass
 
-            # Attempt 2: DOM.getDocument + DOM.querySelector -> nodeId
+            # Fallback attempt: DOM.getDocument + DOM.querySelector -> nodeId
             try:
                 doc_resp = await page.send(cdp.dom.get_document())
-                doc = _unwrap_zendriver_value(doc_resp)
+                doc = _unwrap(doc_resp)
                 root = doc.get("root") or doc
                 root_node_id = (
                     root.get("nodeId")
@@ -248,7 +327,7 @@ async def get_element_rect(
                     qs_resp = await page.send(
                         cdp.dom.query_selector(node_id=root_node_id, selector=sel)
                     )
-                    qs = _unwrap_zendriver_value(qs_resp)
+                    qs = _unwrap(qs_resp)
                     node_id = (
                         qs.get("nodeId")
                         if isinstance(qs, dict)
@@ -265,8 +344,9 @@ async def get_element_rect(
 
         raise ValueError(f"Element not found for selector: {sel!r}")
 
-    # --- Case B: element handle ---
-    t = _unwrap_zendriver_value(target)
+    # --- Case B: element handle from page.select(...) or similar ---
+    # Try objectId first (works across more cases), then nodeId.
+    t = _unwrap(target)
     object_id = (
         getattr(target, "object_id", None)
         or getattr(target, "objectId", None)

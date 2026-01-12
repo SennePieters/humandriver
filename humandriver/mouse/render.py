@@ -8,7 +8,6 @@ from PIL import Image, ImageDraw
 
 from .config import cfg
 from .telemetry import recorder
-from . import telemetry
 from .geometry import get_viewport
 
 
@@ -33,7 +32,7 @@ def _speed_to_rgb(speed, v_min, v_max):
       - slow  => blue (0, 120, 255)
       - mid   => green (60, 205, 60)
       - fast  => red  (255, 60, 60)
-    Uses two-segment interpolation: blue->green->red.
+    Uses two-segment interpolation: blue→green→red.
     """
     if v_max <= v_min:
         t = 0.0
@@ -89,6 +88,7 @@ async def save_mouse_trajectory_jpeg(
     def _render() -> str:
         canvas_width = viewport_width + canvas_margin * 2 + 80  # extra room for legend
         canvas_height = viewport_height + canvas_margin * 2
+
         image = Image.new("RGB", (canvas_width, canvas_height), background_color)
         draw = ImageDraw.Draw(image)
 
@@ -238,7 +238,7 @@ async def save_mouse_trajectory_jpeg(
 
     outfile_path = await asyncio.to_thread(_render)
 
-    cb = telemetry._TRAJECTORY_CALLBACK
+    cb = cfg._TRAJECTORY_CALLBACK
     if cb is not None:
         try:
             asyncio.create_task(cb(FSPath(outfile_path)))

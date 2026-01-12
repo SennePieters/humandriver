@@ -22,7 +22,6 @@ TIMING_JITTER_S: float = getattr(cfg, "TIMING_JITTER_S", 0.0035)
 MIN_SLEEP_S: float = getattr(cfg, "MIN_SLEEP_S", 0.003)
 TARGET_HZ: float = getattr(cfg, "TARGET_HZ", 110)
 
-
 BRIDGE_THRESHOLD_PX: float = getattr(cfg, "BRIDGE_THRESHOLD_PX", 6.0)
 BRIDGE_STEPS_MINMAX: Tuple[int, int] = getattr(cfg, "BRIDGE_STEPS_MINMAX", (8, 18))
 BRIDGE_CURVE_JITTER_FRAC: float = getattr(cfg, "BRIDGE_CURVE_JITTER_FRAC", 0.06)
@@ -45,8 +44,10 @@ WOBBLE_FREQ_2: float = getattr(cfg, "WOBBLE_FREQ_2", 2.2)
 
 END_JITTER_FRAC: float = getattr(cfg, "END_JITTER_FRAC", 0.006)
 
-CDP_SEND_TIMEOUT_S: float = 0.05
-CDP_SEND_MIN_INTERVAL_S: float = 0.015
+CDP_SEND_TIMEOUT_S: float = 0.05  # fail-fast to avoid stalling the event loop
+CDP_SEND_MIN_INTERVAL_S: float = (
+    0.015  # throttle CDP sends to browser scan rate (~15ms)
+)
 
 _last_emit_timestamp: Optional[float] = None  # module-level guard against bursts
 _last_cdp_send_timestamp: Optional[float] = None
@@ -215,7 +216,7 @@ def _build_bridge_waypoints(
     tangent_x, tangent_y = delta_x / distance, delta_y / distance
     normal_x, normal_y = -tangent_y, tangent_x
 
-    jitter_max = BRIDGE_CURVE_JITTER_FRAC
+    jitter_max = getattr(cfg, "BRIDGE_CURVE_JITTER_FRAC", 0.06)
     jitter_max = max(0.10, min(0.18, jitter_max * 2.0))
     anchor_fractions = [0.25, 0.55, 0.85]
     anchors: List[Tuple[float, float]] = []
@@ -398,6 +399,7 @@ async def _emit_mouse_move(page, x: float, y: float) -> None:
         async with _MOUSE_SEND_LOCK:
             for attempt in range(3):
                 try:
+                    # Wrap in task + shield to prevent cancellation crashing zendriver (InvalidStateError)
                     task = asyncio.create_task(
                         page.send(
                             cdp.input_.dispatch_mouse_event(
@@ -405,7 +407,10 @@ async def _emit_mouse_move(page, x: float, y: float) -> None:
                             )
                         )
                     )
-                    resp = await asyncio.wait_for(asyncio.shield(task), timeout=0.10)
+                    resp = await asyncio.wait_for(
+                        asyncio.shield(task),
+                        timeout=0.10,
+                    )
                     if isinstance(resp, dict) and resp.get("success") is False:
                         raise RuntimeError(
                             "CDP dispatchMouseEvent returned success=False"
@@ -419,6 +424,8 @@ async def _emit_mouse_move(page, x: float, y: float) -> None:
                 except Exception as exc:
                     last_err = exc
                 await asyncio.sleep(0.02)
+
+        # If all attempts failed, raise to avoid silently stalling the event loop
         raise RuntimeError(
             f"mouseMoved send failed after retries at ({x:.2f}, {y:.2f})"
         ) from last_err
@@ -437,6 +444,7 @@ async def dispatch_mouse_path(
         )
         return current
 
+    # Clamp incoming points to viewport
     pts = [
         {
             "x": max(0.0, min(viewport_width, float(p["x"]))),
@@ -454,6 +462,7 @@ async def dispatch_mouse_path(
         current = (pts[0]["x"], pts[0]["y"])
 
     segments: List[Tuple[Tuple[float, float], Tuple[float, float]]] = []
+    # Optional bridge from last known position to first point
     if current != (pts[0]["x"], pts[0]["y"]):
         segments.append((current, (pts[0]["x"], pts[0]["y"])))
     for i in range(len(pts) - 1):
@@ -484,7 +493,6 @@ async def dispatch_mouse_path(
             path_points = [start, end]
         if not path_points:
             path_points = [start, end]
-
         # If path is excessively long, decimate to avoid blocking event loop
         if len(path_points) > 1200:
             logging.getLogger(__name__).warning(
@@ -493,7 +501,6 @@ async def dispatch_mouse_path(
             )
             stride = max(1, len(path_points) // 1200)
             path_points = path_points[::stride] + [path_points[-1]]
-
         step_interval = interval
         if max_move_duration > 0 and len(path_points) > 0:
             step_interval = min(

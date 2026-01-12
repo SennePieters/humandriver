@@ -1,5 +1,4 @@
 from __future__ import annotations
-from typing import Tuple, Dict
 
 
 class kcfg:
@@ -16,7 +15,7 @@ class kcfg:
     # Word & punctuation pauses
     SPACE_PAUSE = (0.010, 0.030)
     WORD_PAUSE = (0.060, 0.140)
-    PUNCT_PAUSE: Dict[str, Tuple[float, float]] = {
+    PUNCT_PAUSE = {
         ".": (0.130, 0.240),
         ",": (0.080, 0.160),
         ";": (0.080, 0.160),

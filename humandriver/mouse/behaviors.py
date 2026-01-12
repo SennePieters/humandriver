@@ -9,8 +9,8 @@ from .geometry import get_viewport, get_element_rect, sample_point_in_element
 from .dispatchers import dispatch_mouse_path, _send_cdp_event
 
 REST_RADIUS_PX_HARD_MAX: int = 140
-REST_RADIUS_FRAC_OF_MIN: float = 0.12
-CLICK_DOWN_UP_DELAY_S: Tuple[float, float] = (0.028, 0.065)
+REST_RADIUS_FRAC_OF_MIN: float = 0.12  # 12% of min(viewport width, height)
+CLICK_DOWN_UP_DELAY_S: Tuple[float, float] = (0.028, 0.065)  # randomized within
 DEFAULT_SAFE_INSET_FRAC: float = 0.08
 
 
@@ -46,7 +46,7 @@ def _resolve_mouse_button(name: str = "left") -> Any:
             if hasattr(button_enum, attr):
                 return getattr(button_enum, attr)
         try:
-            return button_enum(name)
+            return button_enum(name)  # some builds allow constructing from a string
         except Exception:
             pass
 
@@ -106,6 +106,7 @@ async def move_to_element(
     """Move the cursor to a target element and optionally click, then optionally rest nearby."""
     viewport_width, viewport_height = await get_viewport(page)
 
+    # Resolve element rect
     if isinstance(target, dict) and {"x", "y", "width", "height"} <= set(target.keys()):
         rect = {
             "x": float(target["x"]),
@@ -118,13 +119,17 @@ async def move_to_element(
     else:
         rect = await get_element_rect(page, target, debug=False)
 
+    # Sample a point *inside* the element with a small safe inset
     target_x, target_y = await sample_point_in_element(
         rect, safe_inset_fraction=safe_inset_fraction
     )
+
+    # Clamp to viewport just in case
     target_x, target_y = _clamp_point(
         target_x, target_y, viewport_width, viewport_height
     )
 
+    # Determine a starting point: last known mouse position or viewport center
     starting_position = getattr(page, "_mouse_pos", None)
     if starting_position is None:
         starting_position = (viewport_width / 2.0, viewport_height / 2.0)
@@ -135,17 +140,20 @@ async def move_to_element(
         viewport_height,
     )
 
+    # Build a minimal path; dispatcher will bridge/smooth and clamp per step
     path = [{"x": start_x, "y": start_y}, {"x": target_x, "y": target_y}]
     await dispatch_mouse_path(page, path, target_width_pixels=rect.get("width", None))
 
     if click:
         await _emit_click(page, target_x, target_y, button_name="left")
+
     setattr(page, "_mouse_pos", (target_x, target_y))
 
     if move_to_rest_after:
         if rest_delay_seconds > 0:
             await asyncio.sleep(rest_delay_seconds)
         await move_to_rest(page)
+
     return target_x, target_y
 
 
