@@ -1,11 +1,8 @@
-from .mouse import (
-    summarize_speeds,
-    MouseController,
-    set_trajectory_callback,
-    recorder,
-    save_mouse_trajectory_jpeg,
-    move_to_element,
-)
+from .behaviors import move_to_element
+from .render import save_mouse_trajectory_jpeg
+from .telemetry import set_trajectory_callback, recorder
+from .controller import MouseController
+from .analysis import summarize_speeds
 
 __all__ = [
     "move_to_element",

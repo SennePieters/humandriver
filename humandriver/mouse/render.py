@@ -7,7 +7,7 @@ from pathlib import Path as FSPath
 from PIL import Image, ImageDraw
 
 from .config import cfg
-from .telemetry import recorder
+from .telemetry import recorder, _TRAJECTORY_CALLBACK
 from .geometry import get_viewport
 
 
@@ -238,7 +238,7 @@ async def save_mouse_trajectory_jpeg(
 
     outfile_path = await asyncio.to_thread(_render)
 
-    cb = cfg._TRAJECTORY_CALLBACK
+    cb = _TRAJECTORY_CALLBACK
     if cb is not None:
         try:
             asyncio.create_task(cb(FSPath(outfile_path)))

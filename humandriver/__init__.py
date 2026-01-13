@@ -1,10 +1,10 @@
 from __future__ import annotations
-from .keyboard.keyboard import type_in_element, summarize_typing
-from .mouse.mouse import (
+from .keyboard import type_in_element, summarize_typing
+from .mouse import (
+    move_to_element,
     recorder,
     set_trajectory_callback,
     save_mouse_trajectory_jpeg,
-    move_to_element,
 )
 
 __all__ = [
