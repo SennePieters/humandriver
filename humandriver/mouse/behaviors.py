@@ -7,6 +7,7 @@ from zendriver import cdp
 
 from .geometry import get_viewport, get_element_rect, sample_point_in_element
 from .dispatchers import dispatch_mouse_path, _send_cdp_event
+from .telemetry import get_mouse_recorder
 
 REST_RADIUS_PX_HARD_MAX: int = 140
 REST_RADIUS_FRAC_OF_MIN: float = 0.12  # 12% of min(viewport width, height)
@@ -64,6 +65,7 @@ async def _emit_click(page, x: float, y: float, *, button_name: str = "left") ->
     """Emit a full click (press, short human-like delay, release) at (x,y)."""
     button = _resolve_mouse_button(button_name)
     if cdp is not None:
+        get_mouse_recorder(page).log_click(x, y)
         await _send_cdp_event(
             page,
             lambda: page.send(

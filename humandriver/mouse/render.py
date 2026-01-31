@@ -7,7 +7,7 @@ from pathlib import Path as FSPath
 from PIL import Image, ImageDraw
 
 from .config import cfg
-from .telemetry import recorder
+from .telemetry import get_mouse_recorder
 from . import telemetry
 from .geometry import get_viewport
 
@@ -84,7 +84,8 @@ async def save_mouse_trajectory_jpeg(
         raise RuntimeError("Pillow (PIL) is required for save_mouse_trajectory_jpeg")
 
     viewport_width, viewport_height = await get_viewport(page)
-    events_snapshot = [e for e in recorder.events if e.kind in ("move", "click")]
+    rec = get_mouse_recorder(page)
+    events_snapshot = [e for e in rec.events if e.kind in ("move", "click")]
 
     def _render() -> str:
         canvas_width = viewport_width + canvas_margin * 2 + 80  # extra room for legend

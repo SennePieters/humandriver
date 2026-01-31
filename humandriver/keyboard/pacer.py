@@ -2,15 +2,15 @@ from __future__ import annotations
 from ..utils import clamp as _clamp
 from .config import kcfg
 from .utils import _sleep
-from .telemetry import recorder
 
 
 class _Pacer:
-    def __init__(self, wpm_lo: float, wpm_hi: float):
+    def __init__(self, wpm_lo: float, wpm_hi: float, recorder):
         self.cps_min = (wpm_lo * 5.0) / 60.0  # min chars/second allowed
         self.cps_max = (wpm_hi * 5.0) / 60.0  # max chars/second allowed
         self.elapsed = 0.0  # total time we've accounted for
         self.printable_chars = 0  # number of printable chars emitted
+        self.recorder = recorder
 
     def on_char(self) -> None:
         self.printable_chars += 1
@@ -47,6 +47,6 @@ class _Pacer:
 
     async def sleep(self, dt: float, will_emit_char_after: bool, tag: str) -> None:
         dt_adj = self.clamp_sleep(dt, will_emit_char_after)
-        recorder.log("pause", tag, dt_adj)
+        self.recorder.log("pause", tag, dt_adj)
         await _sleep(dt_adj)
         self.elapsed += dt_adj

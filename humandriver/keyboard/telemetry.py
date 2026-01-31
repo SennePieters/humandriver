@@ -33,3 +33,9 @@ class KeystrokeRecorder:
 
 
 recorder = KeystrokeRecorder()
+
+
+def get_keyboard_recorder(page) -> KeystrokeRecorder:
+    if not hasattr(page, "_humandriver_key_recorder"):
+        page._humandriver_key_recorder = KeystrokeRecorder()
+    return page._humandriver_key_recorder

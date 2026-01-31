@@ -99,3 +99,9 @@ class TrajectoryRecorder:
 
 # Singleton recorder
 recorder = TrajectoryRecorder()
+
+
+def get_mouse_recorder(page) -> TrajectoryRecorder:
+    if not hasattr(page, "_humandriver_mouse_recorder"):
+        page._humandriver_mouse_recorder = TrajectoryRecorder()
+    return page._humandriver_mouse_recorder

@@ -1,15 +1,15 @@
 from __future__ import annotations
 import math
 import logging
-from typing import List, Dict, Optional
-from .telemetry import recorder
+from typing import List, Dict, Optional, Any
+from .telemetry import recorder as global_recorder, get_keyboard_recorder
 from .utils import _is_printable
 
 # Route debug prints in this module through logging
 print = logging.getLogger(__name__).debug
 
 
-def summarize_typing(seed: Optional[int] = None) -> str:
+def summarize_typing(seed: Optional[int] = None, page: Any = None) -> str:
     """
     Reports:
       - Total duration
@@ -19,7 +19,11 @@ def summarize_typing(seed: Optional[int] = None) -> str:
       - Printable chars & corrections
       - Seed used
     """
-    evs = recorder.events
+    if page:
+        rec = get_keyboard_recorder(page)
+    else:
+        rec = global_recorder
+    evs = rec.events
     if len(evs) < 2:
         return "No typing data"
 
@@ -74,7 +78,7 @@ def summarize_typing(seed: Optional[int] = None) -> str:
     else:
         persec_min = persec_avg = persec_max = 0.0
 
-    used_seed = recorder.seed if recorder.seed is not None else seed
+    used_seed = rec.seed if rec.seed is not None else seed
 
     return (
         "Typing Summary:\n"
@@ -83,16 +87,16 @@ def summarize_typing(seed: Optional[int] = None) -> str:
         f"  Keystroke Avg WPM (no pauses): {keystroke_wpm:.2f}\n"
         f"  Per-sec WPM (min/avg/max): {persec_min:.2f} / {persec_avg:.2f} / {persec_max:.2f}\n"
         f"  Printable chars: {total_chars}\n"
-        f"  Corrections (errors fixed): {recorder.error_count}\n"
+        f"  Corrections (errors fixed): {rec.error_count}\n"
         f"  Random seed: {used_seed if used_seed is not None else 'N/A'}"
     )
 
 
-async def summarize_typing_async(seed: Optional[int] = None) -> str:
+async def summarize_typing_async(seed: Optional[int] = None, page: Any = None) -> str:
     """Async wrapper for summarize_typing so you can `await` it if you prefer."""
-    return summarize_typing(seed)
+    return summarize_typing(seed, page=page)
 
 
-async def print_typing_summary(seed: Optional[int] = None) -> None:
+async def print_typing_summary(seed: Optional[int] = None, page: Any = None) -> None:
     """Async helper that prints the summary."""
-    print(summarize_typing(seed))
+    print(summarize_typing(seed, page=page))

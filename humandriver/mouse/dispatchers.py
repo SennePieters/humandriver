@@ -9,7 +9,7 @@ from typing import List, Dict, Tuple, Optional, Callable, Awaitable, Any
 from zendriver import cdp
 
 from .config import cfg
-from .telemetry import recorder, _MOUSE_SEND_LOCK
+from .telemetry import _MOUSE_SEND_LOCK, get_mouse_recorder
 from .geometry import get_viewport, _clamp_point_to_viewport
 
 # Config values copied locally for speed/readability
@@ -393,7 +393,7 @@ def windmouse(
 
 async def _emit_mouse_move(page, x: float, y: float) -> None:
     """Minimal mouse move emit with fast retries; aborts quickly on persistent CDP stalls."""
-    recorder.log_move(x, y)
+    get_mouse_recorder(page).log_move(x, y)
     if cdp is not None:
         last_err: Optional[BaseException] = None
         async with _MOUSE_SEND_LOCK:

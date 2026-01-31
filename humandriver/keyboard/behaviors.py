@@ -6,7 +6,7 @@ from typing import Optional
 
 from ..utils import clamp as _clamp, random_uniform as _rand
 from .config import kcfg
-from .telemetry import recorder
+from .telemetry import get_keyboard_recorder
 from .utils import (
     HiResTimer,
     _base_char_delay_for_wpm,
@@ -55,21 +55,23 @@ async def type_in_element(
     if seed is not None:
         random.seed(seed)
 
+    rec = get_keyboard_recorder(page)
+
     # If no text, still honor tab/enter (both if requested)
     if not text:
         if tab:
             await _press_tab(page)
-            recorder.log("keyDown", "Tab", 0.0)
-            recorder.log("keyUp", "Tab", 0.0)
+            rec.log("keyDown", "Tab", 0.0)
+            rec.log("keyUp", "Tab", 0.0)
         if enter:
             await _press_enter(page)
-            recorder.log("keyDown", "Enter", 0.0)
-            recorder.log("keyUp", "Enter", 0.0)
+            rec.log("keyDown", "Enter", 0.0)
+            rec.log("keyUp", "Enter", 0.0)
         if log_summary:
-            print(summarize_typing())
+            print(summarize_typing(page=page))
         return
 
-    recorder.reset(seed=seed)
+    rec.reset(seed=seed)
 
     # --- Speed model (clamped to WPM_RANGE) ---
     w_lo, w_hi = (
@@ -82,7 +84,7 @@ async def type_in_element(
     base_dt = _base_char_delay_for_wpm(wpm0)
 
     # Pacer to enforce overall WPM bounds
-    pacer = _Pacer(w_lo, w_hi)
+    pacer = _Pacer(w_lo, w_hi, rec)
 
     # Burst state
     remaining_in_burst = int(
@@ -133,12 +135,12 @@ async def type_in_element(
             if will_err:
                 wrong = _force_typo(ch)  # guaranteed different
                 await _emit_insert_text(page, wrong)
-                recorder.log("char", wrong, 0.0)
+                rec.log("char", wrong, 0.0)
                 pacer.on_char()  # count the wrong printable char
 
                 # === Human-like correction sequence ===
                 consecutive_errors += 1
-                recorder.error_count += 1
+                rec.error_count += 1
 
                 # "Oops/think" hesitation before reaching for Backspace
                 await pacer.sleep(
@@ -152,8 +154,8 @@ async def type_in_element(
 
                 # Backspace the wrong char
                 await _press_backspace(page)
-                recorder.log("keyDown", "Backspace", 0.0)
-                recorder.log("keyUp", "Backspace", 0.0)
+                rec.log("keyDown", "Backspace", 0.0)
+                rec.log("keyUp", "Backspace", 0.0)
                 pacer.on_edit_key()
 
                 # Brief pause after correction (we will type a char after this)
@@ -163,7 +165,7 @@ async def type_in_element(
 
                 # Insert the correct character using insertText (most reliable)
                 await _emit_insert_text(page, ch)
-                recorder.log("char", ch, 0.0)
+                rec.log("char", ch, 0.0)
                 pacer.on_char()
 
                 # End of correction: reset streak
@@ -173,19 +175,19 @@ async def type_in_element(
                 # No error: emit the intended char/control
                 if ch == "\n":
                     await _press_enter(page)
-                    recorder.log("keyDown", "Enter", 0.0)
-                    recorder.log("keyUp", "Enter", 0.0)
+                    rec.log("keyDown", "Enter", 0.0)
+                    rec.log("keyUp", "Enter", 0.0)
                     pacer.on_edit_key()
                     consecutive_errors = 0
                 elif _is_printable(ch):
                     await _emit_insert_text(page, ch)
-                    recorder.log("char", ch, 0.0)
+                    rec.log("char", ch, 0.0)
                     pacer.on_char()
                     consecutive_errors = 0
                 else:
                     await _emit_key_down_up(page, key=ch, text=ch)
-                    recorder.log("keyDown", ch, 0.0)
-                    recorder.log("keyUp", ch, 0.0)
+                    rec.log("keyDown", ch, 0.0)
+                    rec.log("keyUp", ch, 0.0)
                     pacer.on_edit_key()
                     consecutive_errors = 0
 
@@ -198,14 +200,14 @@ async def type_in_element(
         # Post-action (Tab/Enter) — honor both if requested
         if tab:
             await _press_tab(page)
-            recorder.log("keyDown", "Tab", 0.0)
-            recorder.log("keyUp", "Tab", 0.0)
+            rec.log("keyDown", "Tab", 0.0)
+            rec.log("keyUp", "Tab", 0.0)
             pacer.on_edit_key()
         if enter:
             await _press_enter(page)
-            recorder.log("keyDown", "Enter", 0.0)
-            recorder.log("keyUp", "Enter", 0.0)
+            rec.log("keyDown", "Enter", 0.0)
+            rec.log("keyUp", "Enter", 0.0)
             pacer.on_edit_key()
 
     if log_summary:
-        print(summarize_typing())
+        print(summarize_typing(page=page))
