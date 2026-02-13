@@ -9,7 +9,7 @@ A Python library for human-like mouse and keyboard automation, designed to work 
 ## Installation
 
 ```bash
-pip install humandriver @ git+https://github.com/SennePieters/humandriver.git
+pip install humandriver
 ```
 
 ## Usage
