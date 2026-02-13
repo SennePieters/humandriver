@@ -11,7 +11,11 @@ setup(
     long_description=long_description,
     long_description_content_type="text/markdown",
     author="SennePieters",
+    author_email="senne.pieters02@gmail.com",
     url="https://github.com/SennePieters/humandriver",
+    project_urls={
+        "Bug Tracker": "https://github.com/SennePieters/humandriver/issues",
+    },
     packages=find_packages(),
     install_requires=[
         "zendriver",

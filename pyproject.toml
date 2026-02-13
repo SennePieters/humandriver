@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "Humandriver_SennePieters"
+version = "1.0.1"
+authors = [
+  { name="SennePieters", email="senne.pieters02@gmail.com" },
+]
+description = "Human-like mouse and keyboard automation for zendriver"
+readme = "README.md"
+requires-python = ">=3.8"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+license = {text = "MIT License"}
+dependencies = [
+    "zendriver",
+    "Pillow",
+]
+
+[project.urls]
+Homepage = "https://github.com/SennePieters/humandriver"
+"Bug Tracker" = "https://github.com/SennePieters/humandriver/issues"
