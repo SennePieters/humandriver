@@ -48,7 +48,10 @@ class KeystrokeRecorder:
         self.error_count = 0
 
 
-recorder = KeystrokeRecorder()
+def get_keyboard_recorder(page) -> KeystrokeRecorder:
+    if not hasattr(page, "_humandriver_keyboard_recorder"):
+        page._humandriver_keyboard_recorder = KeystrokeRecorder()
+    return page._humandriver_keyboard_recorder
 
 
 # =========================================================
@@ -265,7 +268,8 @@ def _force_typo(ch: str) -> str:
 
 
 class _Pacer:
-    def __init__(self, wpm_lo: float, wpm_hi: float):
+    def __init__(self, wpm_lo: float, wpm_hi: float, recorder: KeystrokeRecorder):
+        self.recorder = recorder
         self.cps_min = (wpm_lo * 5.0) / 60.0  # min chars/second allowed
         self.cps_max = (wpm_hi * 5.0) / 60.0  # max chars/second allowed
         self.elapsed = 0.0  # total time we've accounted for
@@ -306,7 +310,7 @@ class _Pacer:
 
     async def sleep(self, dt: float, will_emit_char_after: bool, tag: str) -> None:
         dt_adj = self.clamp_sleep(dt, will_emit_char_after)
-        recorder.log("pause", tag, dt_adj)
+        self.recorder.log("pause", tag, dt_adj)
         await _sleep(dt_adj)
         self.elapsed += dt_adj
 
@@ -495,6 +499,8 @@ async def type_in_element(
     if seed is not None:
         random.seed(seed)
 
+    recorder = get_keyboard_recorder(page)
+
     # If no text, still honor tab/enter (both if requested)
     if not text:
         if tab:
@@ -506,7 +512,7 @@ async def type_in_element(
             recorder.log("keyDown", "Enter", 0.0)
             recorder.log("keyUp", "Enter", 0.0)
         if log_summary:
-            print(summarize_typing())
+            print(summarize_typing(page=page))
         return
 
     recorder.reset(seed=seed)
@@ -522,7 +528,7 @@ async def type_in_element(
     base_dt = _base_char_delay_for_wpm(wpm0)
 
     # Pacer to enforce overall WPM bounds
-    pacer = _Pacer(w_lo, w_hi)
+    pacer = _Pacer(w_lo, w_hi, recorder)
 
     # Burst state
     remaining_in_burst = int(
@@ -648,7 +654,7 @@ async def type_in_element(
             pacer.on_edit_key()
 
     if log_summary:
-        print(summarize_typing())
+        print(summarize_typing(page=page))
 
 
 # =========================================================
@@ -656,7 +662,7 @@ async def type_in_element(
 # =========================================================
 
 
-def summarize_typing(seed: Optional[int] = None) -> str:
+def summarize_typing(seed: Optional[int] = None, page: Any = None) -> str:
     """
     Reports:
       - Total duration
@@ -666,7 +672,10 @@ def summarize_typing(seed: Optional[int] = None) -> str:
       - Printable chars & corrections
       - Seed used
     """
-    evs = recorder.events
+    if page is None:
+        return "No page provided for typing summary"
+    rec = get_keyboard_recorder(page)
+    evs = rec.events
     if len(evs) < 2:
         return "No typing data"
 
@@ -721,7 +730,7 @@ def summarize_typing(seed: Optional[int] = None) -> str:
     else:
         persec_min = persec_avg = persec_max = 0.0
 
-    used_seed = recorder.seed if recorder.seed is not None else seed
+    used_seed = rec.seed if rec.seed is not None else seed
 
     return (
         "Typing Summary:\n"
@@ -740,11 +749,11 @@ def summarize_typing(seed: Optional[int] = None) -> str:
 # =========================================================
 
 
-async def summarize_typing_async(seed: Optional[int] = None) -> str:
+async def summarize_typing_async(seed: Optional[int] = None, page: Any = None) -> str:
     """Async wrapper for summarize_typing so you can `await` it if you prefer."""
-    return summarize_typing(seed)
+    return summarize_typing(seed, page=page)
 
 
-async def print_typing_summary(seed: Optional[int] = None) -> None:
+async def print_typing_summary(seed: Optional[int] = None, page: Any = None) -> None:
     """Async helper that prints the summary."""
-    print(summarize_typing(seed))
+    print(summarize_typing(seed, page=page))
