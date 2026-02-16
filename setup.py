@@ -6,7 +6,7 @@ long_description = (this_directory / "README.md").read_text(encoding="utf-8")
 
 setup(
     name="humandriver",
-    version="1.0.3",
+    version="1.0.4",
     description="Human-like mouse and keyboard automation for zendriver",
     long_description=long_description,
     long_description_content_type="text/markdown",
@@ -16,7 +16,8 @@ setup(
     project_urls={
         "Bug Tracker": "https://github.com/SennePieters/humandriver/issues",
     },
-    packages=find_packages(),
+    package_dir={"humandriver": "src"},
+    packages=["humandriver", "humandriver.keyboard", "humandriver.mouse"],
     install_requires=[
         "zendriver",
         "Pillow",
