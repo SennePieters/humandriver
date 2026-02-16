@@ -8,7 +8,13 @@ import logging
 
 TrajectoryCallback = Optional[Callable[[FSPath], Awaitable[None]]]
 _TRAJECTORY_CALLBACK: TrajectoryCallback = None
-_MOUSE_SEND_LOCK = asyncio.Lock()
+
+
+def get_mouse_lock(page) -> asyncio.Lock:
+    """Get or create a per-page lock for serializing mouse events."""
+    if not hasattr(page, "_humandriver_mouse_lock"):
+        page._humandriver_mouse_lock = asyncio.Lock()
+    return page._humandriver_mouse_lock
 
 
 def set_trajectory_callback(cb: TrajectoryCallback) -> None:

@@ -5,11 +5,12 @@ import random
 import time
 import bisect
 import logging
+from dataclasses import dataclass, field
 from typing import List, Dict, Tuple, Optional, Callable, Awaitable, Any
 from zendriver import cdp
 
 from .config import cfg
-from .telemetry import _MOUSE_SEND_LOCK, get_mouse_recorder
+from .telemetry import get_mouse_lock, get_mouse_recorder
 from .geometry import get_viewport, _clamp_point_to_viewport
 
 # Config values copied locally for speed/readability
@@ -49,9 +50,17 @@ CDP_SEND_MIN_INTERVAL_S: float = (
     0.015  # throttle CDP sends to browser scan rate (~15ms)
 )
 
-_last_emit_timestamp: Optional[float] = None  # module-level guard against bursts
-_last_cdp_send_timestamp: Optional[float] = None
-_CDP_SEND_SEMAPHORE = asyncio.Semaphore(1)
+
+@dataclass
+class _PageCDPState:
+    semaphore: asyncio.Semaphore = field(default_factory=lambda: asyncio.Semaphore(1))
+    last_send_ts: Optional[float] = None
+
+
+def _get_cdp_state(page) -> _PageCDPState:
+    if not hasattr(page, "_humandriver_cdp_state"):
+        page._humandriver_cdp_state = _PageCDPState()
+    return page._humandriver_cdp_state
 
 
 async def _send_cdp_event(
@@ -59,11 +68,12 @@ async def _send_cdp_event(
 ) -> None:
     """Bounded-time CDP send with shielded task so it can't be cancelled mid-flight."""
     logger = logging.getLogger(__name__)
-    global _last_cdp_send_timestamp
-    async with _CDP_SEND_SEMAPHORE:
+    state = _get_cdp_state(page)
+
+    async with state.semaphore:
         now = time.perf_counter()
-        if _last_cdp_send_timestamp is not None:
-            gap = now - _last_cdp_send_timestamp
+        if state.last_send_ts is not None:
+            gap = now - state.last_send_ts
             if gap < CDP_SEND_MIN_INTERVAL_S:
                 await asyncio.sleep(CDP_SEND_MIN_INTERVAL_S - gap)
 
@@ -73,7 +83,7 @@ async def _send_cdp_event(
             await asyncio.wait_for(
                 asyncio.shield(send_task), timeout=CDP_SEND_TIMEOUT_S
             )
-            _last_cdp_send_timestamp = time.perf_counter()
+            state.last_send_ts = time.perf_counter()
         except asyncio.TimeoutError:
             elapsed_ms = (time.perf_counter() - start) * 1000.0
             logger.warning(
@@ -86,8 +96,7 @@ async def _send_cdp_event(
             def _late_log(task: asyncio.Task) -> None:
                 try:
                     task.result()
-                    global _last_cdp_send_timestamp
-                    _last_cdp_send_timestamp = time.perf_counter()
+                    state.last_send_ts = time.perf_counter()
                     logger.debug(
                         "CDP %s completed late after %.1f ms",
                         label,
@@ -97,7 +106,7 @@ async def _send_cdp_event(
                     logger.warning("CDP %s failed after timeout", label, exc_info=True)
 
             send_task.add_done_callback(_late_log)
-            _last_cdp_send_timestamp = time.perf_counter()
+            state.last_send_ts = time.perf_counter()
         except Exception:
             logger.warning("CDP %s failed (skipped this event)", label, exc_info=True)
 
@@ -396,7 +405,7 @@ async def _emit_mouse_move(page, x: float, y: float) -> None:
     get_mouse_recorder(page).log_move(x, y)
     if cdp is not None:
         last_err: Optional[BaseException] = None
-        async with _MOUSE_SEND_LOCK:
+        async with get_mouse_lock(page):
             for attempt in range(3):
                 try:
                     # Wrap in task + shield to prevent cancellation crashing zendriver (InvalidStateError)
